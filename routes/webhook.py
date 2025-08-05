@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify
+from utils.authentication import check_auth
 from utils.whatsapp import send_whatsapp_message
 from utils.openai_proxy import chat
 
@@ -7,6 +8,7 @@ webhook_bp = Blueprint('webhook', __name__)
 
 @webhook_bp.route('/chat', methods=['POST'])
 def handle_webhook():
+    check_auth(request.headers.get("Authorization", ""))
     print("Received webhook request")
     try:
         data = request.get_json()

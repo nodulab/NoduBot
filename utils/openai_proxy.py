@@ -1,18 +1,19 @@
 from flask import Flask, jsonify
-import requests
 import os
+import openai
+import time
 from replit import db
+from utils.tiv import fetch_properties_from_tiv
 
 app = Flask(__name__)
+openai.api_key = os.getenv("OPENAI_API_KEY")
+ASSISTANT_ID = os.getenv("ASSISTANT_ID", "")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-
-# === Helpers ===
+# === Memory Helpers ===
 
 
 def convert_to_native(obj):
-    if hasattr(obj, "value"):  # ObservedDict / ObservedList
+    if hasattr(obj, "value"):
         return convert_to_native(obj.value)
     elif isinstance(obj, dict):
         return {k: convert_to_native(v) for k, v in obj.items()}
@@ -20,7 +21,7 @@ def convert_to_native(obj):
         return [convert_to_native(v) for v in obj]
     elif isinstance(obj, (str, int, float, bool)) or obj is None:
         return obj
-    return str(obj)  # fallback
+    return str(obj)
 
 
 def get_memory(key):
@@ -33,55 +34,94 @@ def set_memory(key, messages):
     db[key] = convert_to_native(messages)
 
 
-# === Actions ===
+def reset_memory_route(memory_key):
+    thread_key = f"thread:{memory_key}"
+    if thread_key in db:
+        del db[thread_key]
+        return jsonify({"status": "deleted", "thread_key": thread_key})
+    return jsonify({"status": "not found", "thread_key": thread_key}), 404
 
 
-def reset_memory_route(key):
-    if key in db:
-        del db[key]
-        return jsonify({"status": "deleted", "memory_key": key})
-    return jsonify({"status": "not found", "memory_key": key}), 404
+# === Thread & GPT Logic ===
 
 
-def chat(user_message, memory_key, model="gpt-4o", temperature=0.7):
-    if not user_message:
-        raise ValueError("Missing 'user_message'")
-    if not memory_key:
-        raise ValueError("Missing 'memory_key'")
+def get_or_create_thread(memory_key):
+    key = f"thread:{memory_key}"
+    thread_id = db.get(key)
+    if not thread_id:
+        thread = openai.beta.threads.create()
+        thread_id = thread.id
+        db[key] = thread_id
+        print(f"> Created new thread: {thread_id}")
+    else:
+        print(f"> Reusing thread: {thread_id}")
+    return thread_id
 
-    print(f"> Incoming request with memory_key: {memory_key}")
-    print(f"> Message: {user_message}")
 
-    messages = get_memory(memory_key)
-    print(f"> Retrieved memory for '{memory_key}': {messages}")
+def add_message_to_thread(thread_id, message):
+    openai.beta.threads.messages.create(thread_id=thread_id,
+                                        role="user",
+                                        content=message)
 
-    messages.append({"role": "user", "content": user_message})
-    print(f"> Full messages to OpenAI:\n{messages}")
 
-    # Call OpenAI
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature
-    }
+def handle_tool_calls(run, thread_id):
+    tool_calls = run.required_action.submit_tool_outputs.tool_calls
+    tool_outputs = []
 
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    for tool_call in tool_calls:
+        name = tool_call.function.name
+        args = eval(tool_call.function.arguments)
 
-    response = requests.post(OPENAI_API_URL, headers=headers, json=payload)
-    result = response.json()
+        if name == "search_properties":
+            output = fetch_properties_from_tiv(args)
+            tool_outputs.append({
+                "tool_call_id": tool_call.id,
+                "output": output
+            })
 
-    if response.status_code != 200:
-        raise Exception(result.get("error", {}).get("message", "OpenAI error"))
+    return openai.beta.threads.runs.submit_tool_outputs(
+        thread_id=thread_id, run_id=run.id, tool_outputs=tool_outputs)
 
-    assistant_reply = result["choices"][0]["message"]["content"]
-    print(f"> OpenAI reply: {assistant_reply}")
 
-    # Save updated memory (limit to last 20)
-    messages.append({"role": "assistant", "content": assistant_reply})
-    set_memory(memory_key, messages[-20:])
-    print(f"> Saved memory for '{memory_key}'")
+def poll_until_ready(thread_id, run_id):
+    while True:
+        run = openai.beta.threads.runs.retrieve(thread_id=thread_id,
+                                                run_id=run_id)
 
-    return assistant_reply
+        if run.status in ["queued", "in_progress"]:
+            time.sleep(1)
+            continue
+        elif run.status == "requires_action":
+            run = handle_tool_calls(run, thread_id)
+            continue
+        elif run.status == "completed":
+            return
+        else:
+            raise Exception(f"Run failed or unknown status: {run.status}")
+
+
+def get_latest_assistant_reply(thread_id):
+    messages = openai.beta.threads.messages.list(thread_id=thread_id)
+    for msg in messages.data:
+        if msg.role == "assistant":
+            return msg.content[0].text.value
+    raise Exception("No assistant reply found.")
+
+
+# === Public API ===
+
+
+def chat(user_message, memory_key):
+    if not user_message or not memory_key:
+        raise ValueError("Missing user_message or memory_key")
+
+    print(f"> chat(): memory_key = {memory_key}")
+    thread_id = get_or_create_thread(memory_key)
+    add_message_to_thread(thread_id, user_message)
+
+    run = openai.beta.threads.runs.create(thread_id=thread_id,
+                                          assistant_id=ASSISTANT_ID)
+    print(f"> Run started: {run.id}")
+
+    poll_until_ready(thread_id, run.id)
+    return get_latest_assistant_reply(thread_id)
