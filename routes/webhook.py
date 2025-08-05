@@ -19,7 +19,7 @@ def verify_webhook():
     token = request.args.get("hub.verify_token")
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("WEBHOOK VERIFIED")
+        debug_print("WEBHOOK VERIFIED")
         return Response(challenge, status=200, mimetype="text/plain")
     else:
         return Response("", status=403)
