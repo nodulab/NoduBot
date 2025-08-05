@@ -4,6 +4,7 @@ import openai
 import time
 from replit import db
 from utils.tiv import fetch_properties_from_tiv
+from utils.debugger_utils import debug_print
 
 app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -52,9 +53,9 @@ def get_or_create_thread(memory_key):
         thread = openai.beta.threads.create()
         thread_id = thread.id
         db[key] = thread_id
-        print(f"> Created new thread: {thread_id}")
+        debug_print(f"> Created new thread: {thread_id}")
     else:
-        print(f"> Reusing thread: {thread_id}")
+        debug_print(f"> Reusing thread: {thread_id}")
     return thread_id
 
 
@@ -115,13 +116,13 @@ def chat(user_message, memory_key):
     if not user_message or not memory_key:
         raise ValueError("Missing user_message or memory_key")
 
-    print(f"> chat(): memory_key = {memory_key}")
+    debug_print(f"> chat(): memory_key = {memory_key}")
     thread_id = get_or_create_thread(memory_key)
     add_message_to_thread(thread_id, user_message)
 
     run = openai.beta.threads.runs.create(thread_id=thread_id,
                                           assistant_id=ASSISTANT_ID)
-    print(f"> Run started: {run.id}")
+    debug_print(f"> Run started: {run.id}")
 
     poll_until_ready(thread_id, run.id)
     return get_latest_assistant_reply(thread_id)

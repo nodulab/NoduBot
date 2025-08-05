@@ -1,6 +1,6 @@
-# /utils/meta_whatsapp.py
 import requests
 import os
+from utils.debugger_utils import debug_print
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_ID = "722456124288514"
@@ -21,8 +21,8 @@ def send_whatsapp_message(to, text):
         }
     }
     response = requests.post(url, headers=headers, json=payload)
-    
-    print(f"> WhatsApp response: {response.status_code} {response.text}")
+
+    debug_print(f"> WhatsApp response: {response.status_code} {response.text}")
 
     if response.status_code != 200:
         raise Exception(f"WhatsApp error: {response.text}")
