@@ -65,7 +65,8 @@ def fetch_properties_from_tiv(filters: dict) -> str:
             summaries.append(
                 f"{title}\nPrecio: {moneda} {precio}\n{descripcion}")
 
-        return "\n\n".join(summaries)
+        ret = "\n\n".join(summaries)
+        return ret
 
     except Exception as e:
         print("> TIV API error:", str(e))
