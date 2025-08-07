@@ -1,7 +1,6 @@
 from flask import Flask
 from routes.webhook import webhook_bp
 from routes.ai import ai_bp
-import os
 
 app = Flask(__name__)
 

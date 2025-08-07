@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify, Response
 from utils.whatsapp import send_whatsapp_message
 from utils.openai_proxy import chat
 from utils.debugger_utils import debug_print
+from collections import deque
 import hashlib
 import hmac
 import os
@@ -10,6 +11,9 @@ webhook_bp = Blueprint('webhook', __name__)
 
 APP_SECRET = os.environ.get("META_APP_SECRET")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+
+# Store only last 100 message IDs
+SEEN_MESSAGE_IDS = deque(maxlen=100)
 
 
 @webhook_bp.route("/nodubotchat", methods=["GET"])
@@ -39,7 +43,7 @@ def verify_signature(request):
 
 
 @webhook_bp.route('/nodubotchat', methods=['POST'])
-def handle_webhook():
+def analyze_and_respond():
     if not verify_signature(request):
         return Response("Invalid signature", status=403)
     debug_print("Received webhook request")
@@ -56,6 +60,15 @@ def handle_webhook():
             return jsonify({"status": "no message"}), 200
 
         msg = messages[0]
+
+        # Prevent duplicate processing
+        message_id = msg["id"]
+        if message_id in SEEN_MESSAGE_IDS:
+            debug_print(f"Duplicate message detected: {message_id}")
+            return jsonify({"status": "Duplicate Request - Ignored"}), 200
+
+        SEEN_MESSAGE_IDS.append(message_id)
+
         sender = msg['from']
         text = msg['text']['body']
 
